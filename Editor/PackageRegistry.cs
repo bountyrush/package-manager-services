@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace VoxelBusters.PackageManagerServices
+namespace BountyRush.PackageManagerServices
 {
     public class PackageRegistry
     {

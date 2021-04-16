@@ -7,17 +7,19 @@ using UnityEditor;
 using UnityEditor.PackageManager;
 using Newtonsoft.Json;
 using UnityEditor.PackageManager.Requests;
-using Newtonsoft.Json.Linq;
 
-namespace VoxelBusters.PackageManagerServices
+namespace BountyRush.PackageManagerServices
 {
+    [InitializeOnLoad]
     public class PackageDependencyManager : AssetPostprocessor
     {
         #region Constants
 
-        private     const   string  kPackageManifestFileName    = "package.json";
+        private     const   string  kPackageManifestFileName            = "package.json";
 
-        private     const   string  kProjectManifestFilePath    = "Packages/Manifest.json";
+        private     const   string  kProjectManifestFilePath            = "Packages/Manifest.json";
+
+        private     const   string  kStateAutoResolvePackages           = "auto-resolve-state";
 
         #endregion
 
@@ -25,9 +27,60 @@ namespace VoxelBusters.PackageManagerServices
 
         private     static  ListRequest     s_getPackagesRequest;
 
+        private     static  bool            s_isBusy;
+
+        #endregion
+
+        #region Constructors
+
+        static PackageDependencyManager()
+        {
+            var     autoResolveState    = GetAutoResolvePackagesState();
+            if (autoResolveState != OperationState.Done)
+            {
+                if (autoResolveState == OperationState.Pending)
+                {
+                    SetAutoResolvePackagesState(OperationState.Inprogress);
+                }
+                EditorApplication.delayCall += AutoResolvePackages;
+            }
+        }
+
         #endregion
 
         #region Private static methods
+
+        private static OperationState GetAutoResolvePackagesState()
+        {
+            return (OperationState)SessionState.GetInt(kStateAutoResolvePackages, defaultValue: (int)OperationState.Pending);
+        }
+
+        private static void SetAutoResolvePackagesState(OperationState value)
+        {
+            SessionState.SetInt(kStateAutoResolvePackages, (int)value);
+
+            if (value == OperationState.Inprogress)
+            {
+                Debug.Log("[PackageDependencyManager] Started asset package state check.");
+            }
+            else if (value == OperationState.Done)
+            {
+                Debug.Log("[PackageDependencyManager] Completed asset package state check.");
+            }
+        }
+
+        private static void AutoResolvePackages()
+        {
+            // ensure that asset packages are installed in packages folder
+            if (MoveAllAssetPackages())
+            {
+                return;
+            }
+
+            // find all the custom scoped registries used by the installed packages and add it to project manifest
+            ResolveRegistries();
+            SetAutoResolvePackagesState(OperationState.Done);
+        }
 
         private static string[] FindPackages(string[] assets)
         {
@@ -36,15 +89,42 @@ namespace VoxelBusters.PackageManagerServices
             {
                 if (item.EndsWith(kPackageManifestFileName))
                 {
-                    targetAssets.Add(item);
+                    var     parentFolderName    = Path.GetDirectoryName(item);
+                    targetAssets.Add(parentFolderName);
                 }
             }
             return targetAssets.ToArray();
         }
 
+        private static void SetIsBusy(bool value)
+        {
+            // assign new value
+            s_isBusy    = value;
+
+            // update editor state
+            if (s_isBusy)
+            {
+                EditorApplication.LockReloadAssemblies();
+            }
+            else
+            {
+                EditorApplication.UnlockReloadAssemblies();
+            }
+        }
+
+        private static void SetProjectDirty()
+        {
+            SessionState.EraseInt(kStateAutoResolvePackages);
+        }
+
         #endregion
 
         #region Manage manifest methods
+
+        private static string GetPackageManifestPath(string packagePath)
+        {
+            return packagePath + "/" + kPackageManifestFileName;
+        }
 
         private static void UpdateProjectManifest(PackageRegistry[] addRegistries)
         {
@@ -83,11 +163,12 @@ namespace VoxelBusters.PackageManagerServices
 
         private static PackageRegistry[] GetScopedRegistries(string package)
         {
-            var     manifestDict        = GetManifestObject(path: package + "/" + kPackageManifestFileName);
+            var     manifestPath    = GetPackageManifestPath(package);
+            var     manifestDict    = GetManifestObject(path: manifestPath);
             if (manifestDict.Contains(PackageManifestKey.kScopedRegistries))
             {
-                var     registries      = new List<PackageRegistry>();
-                var     registriesJson  = manifestDict[PackageManifestKey.kScopedRegistries] as IList;
+                var     registries          = new List<PackageRegistry>();
+                var     registriesJson      = manifestDict[PackageManifestKey.kScopedRegistries] as IList;
                 foreach (var registryDict in registriesJson)
                 {
                     var     registryObject  = ConvertJsonObjectToPackageRegistry((IDictionary)registryDict);
@@ -135,7 +216,11 @@ namespace VoxelBusters.PackageManagerServices
                             newRegistries.AddRange(registries);
                         }
                     }
-                    UpdateProjectManifest(newRegistries.ToArray());
+
+                    if (newRegistries.Count != 0)
+                    {
+                        UpdateProjectManifest(newRegistries.ToArray());
+                    }
                 }
                 OnResolveRegistriesEnd();
             }
@@ -144,7 +229,7 @@ namespace VoxelBusters.PackageManagerServices
         private static void OnResolveRegistriesEnd()
         {
             EditorApplication.update   -= OnResolveRegistriesUpdate;
-            EditorApplication.UnlockReloadAssemblies();
+            SetIsBusy(value: false);
         }
 
         #endregion
@@ -193,7 +278,7 @@ namespace VoxelBusters.PackageManagerServices
         private static void MoveAssetPackageToPackagesFolder(string path)
         {
             string  packageName     = new DirectoryInfo(path).Name;
-            Debug.LogFormat("[VoxelBusters] Moving package: {0} to packages folder.", packageName);
+            Debug.LogFormat("[PackageDependencyManager] Moving package: {0} to Packages folder.", packageName);
             MoveDirectory(path, "Packages/" + packageName);
         }
 
@@ -231,10 +316,19 @@ namespace VoxelBusters.PackageManagerServices
         [MenuItem("Assets/Package Manager Services/Install Selected Asset in Packages")]
         private static void MoveSelectedAssetPackage()
         {
-            var     assetPath   = AssetDatabase.GUIDToAssetPath(Selection.assetGUIDs[0]);
-            MoveAssetPackageToPackagesFolder(assetPath);
+            try
+            {
+                SetIsBusy(value: true);
 
-            AssetDatabase.Refresh();
+                var     assetPath   = AssetDatabase.GUIDToAssetPath(Selection.assetGUIDs[0]);
+                MoveAssetPackageToPackagesFolder(assetPath);
+
+                AssetDatabase.Refresh();
+            }
+            finally
+            {
+                SetIsBusy(value: false);
+            }
         }
 
         [MenuItem("Assets/Package Manager Services/Install Selected Asset in Packages", validate = true)]
@@ -243,40 +337,91 @@ namespace VoxelBusters.PackageManagerServices
             if (Selection.assetGUIDs.Length > 0)
             {
                 var     assetPath   = AssetDatabase.GUIDToAssetPath(Selection.assetGUIDs[0]);
-                return assetPath.StartsWith("Assets") && !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(assetPath + "/" + kPackageManifestFileName));
+                return assetPath.StartsWith("Assets") && !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(path: GetPackageManifestPath(assetPath)));
             }
             return false;
         }
 
         [MenuItem("Assets/Package Manager Services/Install All Assets in Packages")]
-        private static void MoveAllAssetPackages()
+        private static bool MoveAllAssetPackages()
         {
-            // find all the packages added to Assets folder
-            var     assetPackages   = new List<string>();
-            foreach (var assetGuid in AssetDatabase.FindAssets("t:textasset"))
+            try
             {
-                var     assetPath   = AssetDatabase.GUIDToAssetPath(assetGuid);
-                if (assetPath.StartsWith("Assets") && assetPath.EndsWith(kPackageManifestFileName))
-                {
-                    assetPackages.Add(assetPath.Substring(0, assetPath.Length - (kPackageManifestFileName.Length + 1)));
-                }
-            }
+                SetIsBusy(value: true);
 
-            // move shortlisted packages to Packages folder
-            foreach (var packagePath in assetPackages)
-            {
-                MoveAssetPackageToPackagesFolder(packagePath);
+                // find all the packages added to Assets folder
+                var assetPackages = new List<string>();
+                foreach (var assetGuid in AssetDatabase.FindAssets("t:textasset"))
+                {
+                    var assetPath = AssetDatabase.GUIDToAssetPath(assetGuid);
+                    if (assetPath.StartsWith("Assets") && assetPath.EndsWith(kPackageManifestFileName))
+                    {
+                        assetPackages.Add(assetPath.Substring(0, assetPath.Length - (kPackageManifestFileName.Length + 1)));
+                    }
+                }
+
+                // move shortlisted packages to Packages folder
+                foreach (var packagePath in assetPackages)
+                {
+                    MoveAssetPackageToPackagesFolder(packagePath);
+                }
+                AssetDatabase.Refresh();
+
+                return (assetPackages.Count != 0);
             }
-            AssetDatabase.Refresh();
+            finally
+            {
+                SetIsBusy(value: false);
+            }
         }
 
         [MenuItem("Assets/Package Manager Services/Resolve Registries")]
         private static void ResolveRegistries()
         {
-            EditorApplication.LockReloadAssemblies();
+            SetIsBusy(value: true);
 
             s_getPackagesRequest        = Client.List();
             EditorApplication.update   += OnResolveRegistriesUpdate;
+        }
+
+        #endregion
+
+        #region Editor callback methods
+
+        private static void OnPostprocessAllAssets(string[] importedAssets, string[] deletedAssets, string[] movedAssets, string[] movedFromAssetPaths)
+        {
+            // disable checks until manager is ready
+            if (s_isBusy)
+            {
+                return;
+            }
+
+            // check whether project configuration is dirty
+            var     importedPackages        = FindPackages(importedAssets);
+            if (importedPackages.Length != 0)
+            {
+                foreach (var package in importedPackages)
+                {
+                    if (package.StartsWith("Assets"))
+                    {
+                        SetProjectDirty();
+                        break;
+                    }
+                }
+            }
+        }
+
+        #endregion
+
+        #region Nested types
+
+        private enum OperationState : int
+        {
+            Pending,
+
+            Inprogress,
+
+            Done
         }
 
         #endregion

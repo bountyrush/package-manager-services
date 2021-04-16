@@ -3,7 +3,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace VoxelBusters.PackageManagerServices
+namespace BountyRush.PackageManagerServices
 {
     public static class JsonConverterUtility
     {
