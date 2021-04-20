@@ -42,6 +42,7 @@ namespace BountyRush.PackageManagerServices
 
         private ResourcePackageInfo[] GetResourcePackages(string package, bool includeOptionals)
         {
+            var     packageName         = new DirectoryInfo(package).Name.Split('@')[0];
             var     manifestPath        = PackageUtility.GetPackageManifestPath(package);
             var     manifestJsonDict    = PackageUtility.GetManifestObject(path: manifestPath);
             if (manifestJsonDict.TryGetValue(key: PackageManifestKey.kResourcePackages, value: out IList resourcePackageJsonList))
@@ -58,16 +59,28 @@ namespace BountyRush.PackageManagerServices
                         continue;
                     }
 
-                    var     path            = item["path"] as string;
-                    var     isLocalFile     = !path.StartsWith("Packages");
-                    var     parentPackage   = isLocalFile ? new DirectoryInfo(package).Name : path.Split('/')[1];
-                    var     fullPath        = isLocalFile ? "Packages/" + parentPackage + "/" + path : path;
-                    resourcePackages.Add(new ResourcePackageInfo(
-                        name: item["name"] as string,
-                        path: fullPath,
-                        installPath: installPath,
-                        parent: parentPackage,
-                        isOptional: optional));
+                    var    resourceName     = item["name"] as string;
+                    if (item.TryGetValue(key: "path", value: out string path, defaultValue: null))
+                    {
+                        var     isLocalFile     = !path.StartsWith("Packages");
+                        var     parentPackage   = isLocalFile ? packageName : path.Split('/')[1];
+                        var     fullPath        = isLocalFile ? "Packages/" + parentPackage + "/" + path : path;
+                        resourcePackages.Add(new ResourcePackageInfo(
+                            name: resourceName,
+                            path: fullPath,
+                            installPath: installPath,
+                            parent: parentPackage,
+                            isOptional: optional));
+                    }
+                    else if (item.TryGetValue(key: "executeMethod", value: out string executeMethod, defaultValue: null))
+                    {
+                        resourcePackages.Add(new ResourcePackageInfo(
+                            name: resourceName,
+                            executeMethod: executeMethod,
+                            installPath: installPath,
+                            parent: packageName,
+                            isOptional: optional));
+                    }
                 }
                 return resourcePackages.ToArray();
             }
@@ -85,12 +98,12 @@ namespace BountyRush.PackageManagerServices
                     messageBuilder.AppendLine(item.Name);
                 }
 
-                var     selectedButton  = EditorUtility.DisplayDialog(
+                var     canImport       = EditorUtility.DisplayDialog(
                     title: "Import Resources",
                     message: messageBuilder.ToString(),
                     ok: "Import",
                     cancel: "Cancel");
-                if (!string.Equals(selectedButton, "Import"))
+                if (!canImport)
                 {
                     return;
                 }
@@ -99,7 +112,14 @@ namespace BountyRush.PackageManagerServices
             // import specified packages
             foreach (var item in resourcePackages)
             {
-                AssetDatabase.ImportPackage(packagePath: item.Path, interactive: false); 
+                if (item.Path != null)
+                {
+                    AssetDatabase.ImportPackage(packagePath: item.Path, interactive: false);
+                }
+                else if (item.ExecuteMethod != null)
+                {
+                    ReflectionUtility.InvokeStaticMethod(item.ExecuteMethod);
+                }
             }
         }
 
@@ -146,6 +166,8 @@ namespace BountyRush.PackageManagerServices
 
             public string Path { get; private set; }
 
+            public string ExecuteMethod { get; private set; }
+
             public string InstallPath { get; private set; }
 
             public string Parent { get; private set; }
@@ -156,11 +178,14 @@ namespace BountyRush.PackageManagerServices
 
             #region Constructors
 
-            public ResourcePackageInfo(string name, string path, string installPath, string parent, bool isOptional)
+            public ResourcePackageInfo(string name, string path = null,
+                string executeMethod = null, string installPath = null,
+                string parent = null, bool isOptional = false)
             {
                 // set properties
                 Name            = name;
                 Path            = path;
+                ExecuteMethod   = executeMethod;
                 InstallPath     = installPath;
                 Parent          = parent;
                 IsOptional      = isOptional;

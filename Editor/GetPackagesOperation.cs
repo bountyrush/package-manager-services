@@ -13,6 +13,18 @@ namespace BountyRush.PackageManagerServices
 
         private     ListRequest             m_getPackagesRequest;
 
+        private     bool                    m_includeIndirectDependencies;
+
+        #endregion
+
+        #region Constructors
+
+        public GetPackagesOperation(bool includeIndirectDependencies = true)
+        {
+            // set properties
+            m_includeIndirectDependencies   = includeIndirectDependencies;
+        }
+
         #endregion
 
         #region Base class methods
@@ -21,7 +33,11 @@ namespace BountyRush.PackageManagerServices
         {
             base.OnStart();
 
+#if UNITY_2019_1_OR_NEWER
+            m_getPackagesRequest    = Client.List(offlineMode: true, includeIndirectDependencies: m_includeIndirectDependencies);
+#else
             m_getPackagesRequest    = Client.List();
+#endif
         }
 
         protected override void OnProgress()
