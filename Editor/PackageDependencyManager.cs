@@ -98,7 +98,7 @@ namespace BountyRush.PackageManagerServices
             MoveAllAssetPackages();
 
             // find all the custom scoped registries used by the installed packages and add it to project manifest
-            AddRegistries(() =>
+            AddRegistriesInternal(() =>
             {
                 // import essential resources
                 var     importOp        = new ImportResourcePackagesOperation();
@@ -108,6 +108,30 @@ namespace BountyRush.PackageManagerServices
                     AssetDatabase.Refresh();
                 };
             });
+        }
+
+        private static void AddRegistriesInternal(System.Action completionCallback = null)
+        {
+            Debug.Log("[PackageDependencyManager] Started add-registries operation.");
+
+            // mark that operation is in progress
+            SetIsBusy(value: true);
+
+            // start operation
+            var     updateOp        = new UpdateScopedRegistriesOperation();
+            updateOp.OnComplete    += (op) =>
+            {
+                Debug.Log("[PackageDependencyManager] Completed add-registries operation.");
+
+                // reset state
+                SetIsBusy(value: false);
+
+                // refresh asset database
+                AssetDatabase.Refresh();
+
+                // send callback
+                completionCallback?.Invoke();
+            };
         }
 
         private static OperationState GetResolvePackagesOperationState()
@@ -241,28 +265,9 @@ namespace BountyRush.PackageManagerServices
         }
 
         [MenuItem("Assets/Package Manager Services/Add Registries")]
-        private static void AddRegistries(System.Action completionCallback = null)
+        private static void AddRegistries()
         {
-            Debug.Log("[PackageDependencyManager] Started add-registries operation.");
-
-            // mark that operation is in progress
-            SetIsBusy(value: true);
-
-            // start operation
-            var     updateOp        = new UpdateScopedRegistriesOperation();
-            updateOp.OnComplete    += (op) =>
-            {
-                Debug.Log("[PackageDependencyManager] Completed add-registries operation.");
-
-                // reset state
-                SetIsBusy(value: false);
-
-                // refresh asset database
-                AssetDatabase.Refresh();
-
-                // send callback
-                completionCallback?.Invoke();
-            };
+            AddRegistriesInternal();
         }
 
         [MenuItem("Assets/Package Manager Services/Add Registries", validate = true)]
