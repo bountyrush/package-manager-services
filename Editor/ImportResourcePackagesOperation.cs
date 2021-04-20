@@ -82,7 +82,7 @@ namespace BountyRush.PackageManagerServices
                 messageBuilder.AppendLine("System has detected that following resource packages are required for your project.");
                 foreach (var item in resourcePackages)
                 {
-                    messageBuilder.AppendFormat("{0}: {1}", item.Name, item.Parent);
+                    messageBuilder.AppendLine(item.Name);
                 }
 
                 var     selectedButton  = EditorUtility.DisplayDialog(
