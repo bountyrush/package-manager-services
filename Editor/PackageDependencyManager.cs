@@ -4,9 +4,6 @@ using System.Linq;
 using System.IO;
 using UnityEngine;
 using UnityEditor;
-using UnityEditor.PackageManager;
-using Newtonsoft.Json;
-using UnityEditor.PackageManager.Requests;
 
 namespace BountyRush.PackageManagerServices
 {
@@ -15,19 +12,15 @@ namespace BountyRush.PackageManagerServices
     {
         #region Constants
 
-        private     const   string  kPackageManifestFileName            = "package.json";
-
-        private     const   string  kProjectManifestFilePath            = "Packages/Manifest.json";
-
-        private     const   string  kStateAutoResolvePackages           = "auto-resolve-state";
+        private     const   string      kStateResolvePackages   = "resolve-packages-state";
 
         #endregion
 
         #region Static fields
 
-        private     static  ListRequest     s_getPackagesRequest;
+        private     static  bool        s_isBusy;
 
-        private     static  bool            s_isBusy;
+        private     static  int         s_isBusyRequestCounter  = 0;
 
         #endregion
 
@@ -35,59 +28,19 @@ namespace BountyRush.PackageManagerServices
 
         static PackageDependencyManager()
         {
-            var     autoResolveState    = GetAutoResolvePackagesState();
-            if (autoResolveState != OperationState.Done)
-            {
-                if (autoResolveState == OperationState.Pending)
-                {
-                    SetAutoResolvePackagesState(OperationState.Inprogress);
-                }
-                EditorApplication.delayCall += AutoResolvePackages;
-            }
+            EditorApplication.delayCall    += AutoResolvePackagesIfRequired;
         }
 
         #endregion
 
         #region Private static methods
 
-        private static OperationState GetAutoResolvePackagesState()
-        {
-            return (OperationState)SessionState.GetInt(kStateAutoResolvePackages, defaultValue: (int)OperationState.Pending);
-        }
-
-        private static void SetAutoResolvePackagesState(OperationState value)
-        {
-            SessionState.SetInt(kStateAutoResolvePackages, (int)value);
-
-            if (value == OperationState.Inprogress)
-            {
-                Debug.Log("[PackageDependencyManager] Started asset package state check.");
-            }
-            else if (value == OperationState.Done)
-            {
-                Debug.Log("[PackageDependencyManager] Completed asset package state check.");
-            }
-        }
-
-        private static void AutoResolvePackages()
-        {
-            // ensure that asset packages are installed in packages folder
-            if (MoveAllAssetPackages())
-            {
-                return;
-            }
-
-            // find all the custom scoped registries used by the installed packages and add it to project manifest
-            ResolveRegistries();
-            SetAutoResolvePackagesState(OperationState.Done);
-        }
-
         private static string[] FindPackages(string[] assets)
         {
             var     targetAssets    = new List<string>();
             foreach (var item in assets)
             {
-                if (item.EndsWith(kPackageManifestFileName))
+                if (item.EndsWith(PackageUtility.kPackageManifestFileName))
                 {
                     var     parentFolderName    = Path.GetDirectoryName(item);
                     targetAssets.Add(parentFolderName);
@@ -98,177 +51,84 @@ namespace BountyRush.PackageManagerServices
 
         private static void SetIsBusy(bool value)
         {
-            // assign new value
-            s_isBusy    = value;
-
-            // update editor state
+            // based on value, update counter
+            s_isBusyRequestCounter  = value ? (s_isBusyRequestCounter + 1) : Mathf.Max(0, s_isBusyRequestCounter - 1);
+            
+            // update state value
             if (s_isBusy)
             {
-                EditorApplication.LockReloadAssemblies();
+                if (s_isBusyRequestCounter == 0)
+                {
+                    s_isBusy    = false;
+                    EditorApplication.UnlockReloadAssemblies();
+                }
             }
-            else
+            else if (s_isBusyRequestCounter == 1)
             {
-                EditorApplication.UnlockReloadAssemblies();
+                s_isBusy    = true;
+                EditorApplication.LockReloadAssemblies();
             }
         }
 
         private static void SetProjectDirty()
         {
-            SessionState.EraseInt(kStateAutoResolvePackages);
+            SessionState.EraseInt(kStateResolvePackages);
         }
 
         #endregion
 
-        #region Manage manifest methods
+        #region Manage packages methods
 
-        private static string GetPackageManifestPath(string packagePath)
+        private static void AutoResolvePackagesIfRequired()
         {
-            return packagePath + "/" + kPackageManifestFileName;
+            if (GetResolvePackagesOperationState() != OperationState.Pending)
+            {
+                return;
+            }
+
+            EvaluateAndResolvePackages();
         }
 
-        private static void UpdateProjectManifest(PackageRegistry[] addRegistries)
+        private static void EvaluateAndResolvePackages()
         {
-            var     projectManifestDict     = GetManifestObject(kProjectManifestFilePath);
+            // update operation state
+            SetResolvePackagesOperationState(OperationState.Inprogress);
 
-            // add new scoped registries to manifest
-            if (!projectManifestDict.Contains(ProjectManifestKey.kScopedRegistries))
+            // ensure that asset packages are installed in Packages folder
+            MoveAllAssetPackages();
+
+            // find all the custom scoped registries used by the installed packages and add it to project manifest
+            AddRegistries(() =>
             {
-                projectManifestDict[ProjectManifestKey.kScopedRegistries]   = new List<IDictionary>();
-            }
-            var     projectScopedRegistries = ConvertIListItems(projectManifestDict[ProjectManifestKey.kScopedRegistries] as IList, (IDictionary item) => ConvertJsonObjectToPackageRegistry(item));
-            foreach (var registry in addRegistries)
-            {
-                var     existingRegistry    = projectScopedRegistries.Find((item) => string.Equals(registry.Name, item.Name));
-                if (existingRegistry != null)
+                // import essential resources
+                var     importOp        = new ImportResourcePackagesOperation();
+                importOp.OnComplete    += (op) =>
                 {
-                    MergeRegistryScopes(fromRegistry: registry, toRegistry: existingRegistry);
-                }
-                else
-                {
-                    projectScopedRegistries.Add(registry.Clone());
-                }
-            }
-            projectManifestDict[ProjectManifestKey.kScopedRegistries]   = projectScopedRegistries.ConvertAll((item) => ConvertPackageRegistryToJsonObject(item));
-
-            // commit new changes
-            var     fileText        = JsonConvert.SerializeObject(projectManifestDict, Formatting.Indented);
-            File.WriteAllText(kProjectManifestFilePath, fileText);
+                    SetResolvePackagesOperationState(OperationState.Done);
+                    AssetDatabase.Refresh();
+                };
+            });
         }
 
-        private static IDictionary GetManifestObject(string path)
+        private static OperationState GetResolvePackagesOperationState()
         {
-            var     manifestText    = File.ReadAllText(path);
-            return JsonConverterUtility.DeserializeObject(manifestText) as IDictionary;
+            return (OperationState)SessionState.GetInt(kStateResolvePackages, defaultValue: (int)OperationState.Pending);
         }
 
-        private static PackageRegistry[] GetScopedRegistries(string package)
+        private static void SetResolvePackagesOperationState(OperationState value)
         {
-            var     manifestPath    = GetPackageManifestPath(package);
-            var     manifestDict    = GetManifestObject(path: manifestPath);
-            if (manifestDict.Contains(PackageManifestKey.kScopedRegistries))
+            SessionState.SetInt(kStateResolvePackages, (int)value);
+
+            if (value == OperationState.Inprogress)
             {
-                var     registries          = new List<PackageRegistry>();
-                var     registriesJson      = manifestDict[PackageManifestKey.kScopedRegistries] as IList;
-                foreach (var registryDict in registriesJson)
-                {
-                    var     registryObject  = ConvertJsonObjectToPackageRegistry((IDictionary)registryDict);
-                    registries.Add(registryObject);
-                }
-                return registries.ToArray();
+                Debug.Log("[PackageDependencyManager] Started resolve-packages operation.");
+                SetIsBusy(true);
             }
-            return null;
-        }
-
-        private static void MergeRegistryScopes(PackageRegistry fromRegistry, PackageRegistry toRegistry)
-        {
-            foreach (var scope in fromRegistry.Scopes)
+            else if (value == OperationState.Done)
             {
-                toRegistry.AddScope(scope);
+                Debug.Log("[PackageDependencyManager] Completed resolve-packages operation.");
+                SetIsBusy(false);
             }
-        }
-
-        #endregion
-
-        #region Manage registry methods
-
-        private static void OnResolveRegistriesUpdate()
-        {
-            if (s_getPackagesRequest.IsCompleted)
-            {
-                var     usedPackages    = new List<string>();
-                if (s_getPackagesRequest.Status == StatusCode.Success)
-                {
-                    foreach (var package in s_getPackagesRequest.Result)
-                    {
-                        usedPackages.Add(package.resolvedPath);
-                    }
-                }
-
-                // add custom registry to project manifest
-                if (usedPackages.Count != 0)
-                {
-                    var     newRegistries   = new List<PackageRegistry>();
-                    foreach (var package in usedPackages)
-                    {
-                        var     registries  = GetScopedRegistries(package);
-                        if (registries != null)
-                        {
-                            newRegistries.AddRange(registries);
-                        }
-                    }
-
-                    if (newRegistries.Count != 0)
-                    {
-                        UpdateProjectManifest(newRegistries.ToArray());
-                    }
-                }
-                OnResolveRegistriesEnd();
-            }
-        }
-
-        private static void OnResolveRegistriesEnd()
-        {
-            EditorApplication.update   -= OnResolveRegistriesUpdate;
-            SetIsBusy(value: false);
-        }
-
-        #endregion
-
-        #region Converter methods
-
-        private static PackageRegistry ConvertJsonObjectToPackageRegistry(IDictionary registryDict)
-        {
-            var     registry    = new PackageRegistry(
-                name: registryDict["name"] as string,
-                url: registryDict["url"] as string);
-            if (registryDict.Contains("scopes"))
-            {
-                foreach (var scope in registryDict["scopes"] as IList)
-                {
-                    registry.AddScope(scope as string);
-                }
-            }
-            return registry;
-        }
-
-        private static IDictionary ConvertPackageRegistryToJsonObject(PackageRegistry registry)
-        {
-            return new Dictionary<string, object>()
-            {
-                { "name", registry.Name },
-                { "url", registry.Url },
-                { "scopes", registry.Scopes }
-            };
-        }
-
-        private static List<TOutput> ConvertIListItems<TInput, TOutput>(IList list, System.Converter<TInput, TOutput> function)
-        {
-            var     outputList      = new List<TOutput>();
-            foreach (var input in list)
-            {
-                outputList.Add(function((TInput)input));
-            }
-            return outputList;
         }
 
         #endregion
@@ -278,7 +138,7 @@ namespace BountyRush.PackageManagerServices
         private static void MoveAssetPackageToPackagesFolder(string path)
         {
             string  packageName     = new DirectoryInfo(path).Name;
-            Debug.LogFormat("[PackageDependencyManager] Moving package: {0} to Packages folder.", packageName);
+            Debug.LogFormat("[PackageDependencyManager] Moving asset package: {0} to Packages folder.", packageName);
             MoveDirectory(path, "Packages/" + packageName);
         }
 
@@ -322,12 +182,11 @@ namespace BountyRush.PackageManagerServices
 
                 var     assetPath   = AssetDatabase.GUIDToAssetPath(Selection.assetGUIDs[0]);
                 MoveAssetPackageToPackagesFolder(assetPath);
-
-                AssetDatabase.Refresh();
             }
             finally
             {
                 SetIsBusy(value: false);
+                AssetDatabase.Refresh();
             }
         }
 
@@ -337,7 +196,7 @@ namespace BountyRush.PackageManagerServices
             if (Selection.assetGUIDs.Length > 0)
             {
                 var     assetPath   = AssetDatabase.GUIDToAssetPath(Selection.assetGUIDs[0]);
-                return assetPath.StartsWith("Assets") && !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(path: GetPackageManifestPath(assetPath)));
+                return assetPath.StartsWith("Assets") && !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(path: PackageUtility.GetPackageManifestPath(assetPath)));
             }
             return false;
         }
@@ -350,13 +209,13 @@ namespace BountyRush.PackageManagerServices
                 SetIsBusy(value: true);
 
                 // find all the packages added to Assets folder
-                var assetPackages = new List<string>();
+                var     assetPackages   = new List<string>();
                 foreach (var assetGuid in AssetDatabase.FindAssets("t:textasset"))
                 {
-                    var assetPath = AssetDatabase.GUIDToAssetPath(assetGuid);
-                    if (assetPath.StartsWith("Assets") && assetPath.EndsWith(kPackageManifestFileName))
+                    var     assetPath   = AssetDatabase.GUIDToAssetPath(assetGuid);
+                    if (assetPath.StartsWith("Assets") && assetPath.EndsWith(PackageUtility.kPackageManifestFileName))
                     {
-                        assetPackages.Add(assetPath.Substring(0, assetPath.Length - (kPackageManifestFileName.Length + 1)));
+                        assetPackages.Add(assetPath.Substring(0, assetPath.Length - (PackageUtility.kPackageManifestFileName.Length + 1)));
                     }
                 }
 
@@ -365,23 +224,63 @@ namespace BountyRush.PackageManagerServices
                 {
                     MoveAssetPackageToPackagesFolder(packagePath);
                 }
-                AssetDatabase.Refresh();
 
                 return (assetPackages.Count != 0);
             }
             finally
             {
                 SetIsBusy(value: false);
+                AssetDatabase.Refresh();
             }
         }
 
-        [MenuItem("Assets/Package Manager Services/Resolve Registries")]
-        private static void ResolveRegistries()
+        [MenuItem("Assets/Package Manager Services/Install All Assets in Packages", validate = true)]
+        private static bool ValidateMoveAllAssetPackages()
         {
+            return !s_isBusy;
+        }
+
+        [MenuItem("Assets/Package Manager Services/Add Registries")]
+        private static void AddRegistries(System.Action completionCallback = null)
+        {
+            Debug.Log("[PackageDependencyManager] Started add-registries operation.");
+
+            // mark that operation is in progress
             SetIsBusy(value: true);
 
-            s_getPackagesRequest        = Client.List();
-            EditorApplication.update   += OnResolveRegistriesUpdate;
+            // start operation
+            var     updateOp        = new UpdateScopedRegistriesOperation();
+            updateOp.OnComplete    += (op) =>
+            {
+                Debug.Log("[PackageDependencyManager] Completed add-registries operation.");
+
+                // reset state
+                SetIsBusy(value: false);
+
+                // refresh asset database
+                AssetDatabase.Refresh();
+
+                // send callback
+                completionCallback?.Invoke();
+            };
+        }
+
+        [MenuItem("Assets/Package Manager Services/Add Registries", validate = true)]
+        private static bool ValidateAddRegistries()
+        {
+            return !s_isBusy;
+        }
+
+        [MenuItem("Assets/Package Manager Services/Resolve Packages")]
+        private static void ResolvePackages()
+        {
+            EvaluateAndResolvePackages();
+        }
+
+        [MenuItem("Assets/Package Manager Services/Resolve Packages", validate = true)]
+        private static bool ValidateResolvePackages()
+        {
+            return !s_isBusy;
         }
 
         #endregion
@@ -397,7 +296,7 @@ namespace BountyRush.PackageManagerServices
             }
 
             // check whether project configuration is dirty
-            var     importedPackages        = FindPackages(importedAssets);
+            var     importedPackages    = FindPackages(importedAssets);
             if (importedPackages.Length != 0)
             {
                 foreach (var package in importedPackages)
