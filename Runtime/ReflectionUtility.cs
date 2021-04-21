@@ -36,7 +36,7 @@ namespace BountyRush.PackageManagerServices
             // invoke method
             if (classType == null)
             {
-                Debug.LogErrorFormat("[ReflectionUtility] Could not find method: {0}", method);
+                Debug.LogWarningFormat("[ReflectionUtility] Could not find method: {0}", method);
                 return;
             }
             classType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static).Invoke(null, null);

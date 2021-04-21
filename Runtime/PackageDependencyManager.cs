@@ -28,6 +28,7 @@ namespace BountyRush.PackageManagerServices
 
         static PackageDependencyManager()
         {
+            // register for events
             EditorApplication.delayCall    += AutoResolvePackagesIfRequired;
         }
 
@@ -100,13 +101,10 @@ namespace BountyRush.PackageManagerServices
             // find all the custom scoped registries used by the installed packages and add it to project manifest
             AddRegistriesInternal(() =>
             {
-                // import essential resources
-                var     importOp        = new ImportResourcePackagesOperation();
-                importOp.OnComplete    += (op) =>
+                ImportResourcePackagesInternal(() =>
                 {
                     SetResolvePackagesOperationState(OperationState.Done);
-                    AssetDatabase.Refresh();
-                };
+                });
             });
         }
 
@@ -123,11 +121,25 @@ namespace BountyRush.PackageManagerServices
             {
                 Debug.Log("[PackageDependencyManager] Completed add-registries operation.");
 
+                AssetDatabase.Refresh();
+
                 // reset state
                 SetIsBusy(value: false);
 
-                // refresh asset database
-                AssetDatabase.Refresh();
+                // send callback
+                completionCallback?.Invoke();
+            };
+        }
+
+        private static void ImportResourcePackagesInternal(System.Action completionCallback = null)
+        {
+            Debug.Log("[PackageDependencyManager] Started import resource-packages operation.");
+
+            // import essential resources
+            var     importOp        = new ImportResourcePackagesOperation();
+            importOp.OnComplete    += (op) =>
+            {
+                Debug.Log("[PackageDependencyManager] Completed import resource-packages operation.");
 
                 // send callback
                 completionCallback?.Invoke();
@@ -253,8 +265,8 @@ namespace BountyRush.PackageManagerServices
             }
             finally
             {
-                SetIsBusy(value: false);
                 AssetDatabase.Refresh();
+                SetIsBusy(value: false);
             }
         }
 
@@ -272,6 +284,18 @@ namespace BountyRush.PackageManagerServices
 
         [MenuItem("Assets/Package Manager Services/Add Registries", validate = true)]
         private static bool ValidateAddRegistries()
+        {
+            return !s_isBusy;
+        }
+
+        [MenuItem("Assets/Package Manager Services/Import Resource Packages")]
+        private static void ImportResourcePackages()
+        {
+            ImportResourcePackagesInternal();
+        }
+
+        [MenuItem("Assets/Package Manager Services/Import Resource Packages", validate = true)]
+        private static bool ValidateImportResourcePackages()
         {
             return !s_isBusy;
         }
