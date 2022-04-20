@@ -24,16 +24,6 @@ namespace BountyRush.PackageManagerServices
 
         #endregion
 
-        #region Constructors
-
-        static PackageDependencyManager()
-        {
-            // register for events
-            EditorApplication.delayCall    += AutoResolvePackagesIfRequired;
-        }
-
-        #endregion
-
         #region Private static methods
 
         private static string[] FindPackages(string[] assets)
@@ -79,16 +69,6 @@ namespace BountyRush.PackageManagerServices
         #endregion
 
         #region Manage packages methods
-
-        private static void AutoResolvePackagesIfRequired()
-        {
-            if (GetResolvePackagesOperationState() != OperationState.Pending)
-            {
-                return;
-            }
-
-            EvaluateAndResolvePackages();
-        }
 
         private static void EvaluateAndResolvePackages()
         {
@@ -209,7 +189,7 @@ namespace BountyRush.PackageManagerServices
 
         #region Menu item methods
 
-        [MenuItem("Assets/Package Manager Services/Install Selected Asset in Packages")]
+        [MenuItem(Constants.kMenuPath + "Resolver/Install as Local Package")]
         private static void MoveSelectedAssetPackage()
         {
             try
@@ -226,7 +206,7 @@ namespace BountyRush.PackageManagerServices
             }
         }
 
-        [MenuItem("Assets/Package Manager Services/Install Selected Asset in Packages", validate = true)]
+        [MenuItem(Constants.kMenuPath + "Resolver/Install as Local Package", validate = true)]
         private static bool ValidateMoveSelectedAssetPackage()
         {
             if (Selection.assetGUIDs.Length > 0)
@@ -237,7 +217,6 @@ namespace BountyRush.PackageManagerServices
             return false;
         }
 
-        [MenuItem("Assets/Package Manager Services/Install All Assets in Packages")]
         private static bool MoveAllAssetPackages()
         {
             try
@@ -270,43 +249,44 @@ namespace BountyRush.PackageManagerServices
             }
         }
 
-        [MenuItem("Assets/Package Manager Services/Install All Assets in Packages", validate = true)]
         private static bool ValidateMoveAllAssetPackages()
         {
             return !s_isBusy;
         }
 
-        [MenuItem("Assets/Package Manager Services/Add Registries")]
+        [MenuItem(Constants.kMenuPath + "Resolver/Add Registries")]
         private static void AddRegistries()
         {
             AddRegistriesInternal();
         }
 
-        [MenuItem("Assets/Package Manager Services/Add Registries", validate = true)]
+        [MenuItem(Constants.kMenuPath + "Resolver/Add Registries", validate = true)]
         private static bool ValidateAddRegistries()
         {
             return !s_isBusy;
         }
 
-        [MenuItem("Assets/Package Manager Services/Import Resource Packages")]
+        [MenuItem(Constants.kMenuPath + "Resolver/Import Resource Packages")]
         private static void ImportResourcePackages()
         {
             ImportResourcePackagesInternal();
         }
 
-        [MenuItem("Assets/Package Manager Services/Import Resource Packages", validate = true)]
+        [MenuItem(Constants.kMenuPath + "Resolver/Import Resource Packages", validate = true)]
         private static bool ValidateImportResourcePackages()
         {
             return !s_isBusy;
         }
 
-        [MenuItem("Assets/Package Manager Services/Resolve Packages")]
+        [MenuItem(Constants.kMenuPath + "Resolver/Resolve Packages")]
         private static void ResolvePackages()
         {
+            if (GetResolvePackagesOperationState() != OperationState.Pending) return;
+
             EvaluateAndResolvePackages();
         }
 
-        [MenuItem("Assets/Package Manager Services/Resolve Packages", validate = true)]
+        [MenuItem(Constants.kMenuPath + "Resolver/Resolve Packages", validate = true)]
         private static bool ValidateResolvePackages()
         {
             return !s_isBusy;

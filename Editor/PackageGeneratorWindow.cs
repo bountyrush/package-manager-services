@@ -24,8 +24,8 @@ namespace BountyRush.PackageManagerServices
 
         #region Static methods
 
-        [MenuItem("Bounty Rush/Package Manager Services/Open Generator")]
-        private static void Init()
+        [MenuItem(Constants.kMenuPath + "Create Package", priority = 1)]
+        public static void ShowWindow()
         {
             var     window      = (PackageGeneratorWindow)GetWindow(typeof(PackageGeneratorWindow));
             window.Show();
@@ -94,6 +94,12 @@ namespace BountyRush.PackageManagerServices
             }
         }
 
+        private static string GetUnityVersion()
+        {
+            var     components  = Application.unityVersion.Split('.');
+            return $"{components[0]}.{components[1]}";
+        }
+
         #endregion
 
         #region Unity methods
@@ -106,7 +112,7 @@ namespace BountyRush.PackageManagerServices
                 m_package           = new UnityPackageDefinition(
                     name: "com.companyname.packagename",
                     version: "1.0.0",
-                    unity: Application.unityVersion);
+                    unity: GetUnityVersion());
             }
         }
 
@@ -132,6 +138,7 @@ namespace BountyRush.PackageManagerServices
                     package: m_package,
                     options: m_options,
                     assemblyName: m_assemblyName);
+                Close();
             }
         }
 

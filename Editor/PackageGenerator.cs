@@ -51,54 +51,80 @@ namespace BountyRush.PackageManagerServices
                 }
             }
 
-            // create assembly definition files
+            CreateAssemblyDefinitionFiles(packagePath, assemblyName, options);
+        }
+
+        private static void CreateAssemblyDefinitionFiles(string packagePath, string assemblyName, PackageGeneratorOptions options)
+        {
+            // runtime definitions
+            var     runtimeAssemblyDefMeta      = default(StringKeyValuePair);
             if (HasValue(options: options, value: PackageGeneratorOptions.IncludeRuntime))
             {
-                var     runtimeDefinition   = new AssemblyDefinition(
-                    name: assemblyName,
+                var     runtimeAssemblyName     = assemblyName;
+                var     runtimeAssemblyDef      = new AssemblyDefinition(
+                    name: runtimeAssemblyName,
                     overrideReferences: true,
                     autoReferenced: true);
-                SerializeObjectAsTextAsset(
-                    path: $"{packagePath}/Runtime/{assemblyName}.asmdef",
-                    obj: runtimeDefinition);
+                var     runtimeAssemblyDefGuid  = SerializeObjectAsTextAsset(
+                    path: $"{packagePath}/Runtime/{runtimeAssemblyName}.asmdef",
+                    obj: runtimeAssemblyDef);
+                runtimeAssemblyDefMeta          = new StringKeyValuePair(runtimeAssemblyName, runtimeAssemblyDefGuid);
 
                 if (HasValue(options: options, value: PackageGeneratorOptions.IncludeRuntimeTests))
                 {
-                    var     testDefinition  = new AssemblyDefinition(
-                        name: $"{assemblyName}.Tests",
+                    var     testAssemblyName    = $"{runtimeAssemblyName}.Tests";
+                    var     testAssemblyDef     = new AssemblyDefinition(
+                        name: testAssemblyName,
+                        references: new string[] { GetAssemblyReferenceNameOrGuid(runtimeAssemblyDefMeta) },
                         optionalUnityReferences: new string[] { "TestAssemblies" },
                         includePlatforms: new string[] { "Editor" },
                         overrideReferences: true,
                         precompiledReferences: new string[] { "NSubstitute.dll" },
                         autoReferenced: true);
                     SerializeObjectAsTextAsset(
-                        path: $"{packagePath}/Tests/Runtime/{assemblyName}.Tests.asmdef",
-                        obj: testDefinition);
+                        path: $"{packagePath}/Tests/Runtime/{testAssemblyName}.asmdef",
+                        obj: testAssemblyDef);
                 }
             }
+
+            // editor definitions
             if (HasValue(options: options, value: PackageGeneratorOptions.IncludeEditor))
             {
-                var     editorDefinition    = new AssemblyDefinition(
-                    name: $"{assemblyName}.Editor",
+                var     editorDependencies      = new List<StringKeyValuePair>();
+                if (runtimeAssemblyDefMeta != null)
+                {
+                    editorDependencies.Add(runtimeAssemblyDefMeta);
+                }
+
+                var     editorAssemblyName      = $"{assemblyName}.Editor";
+                var     editorAssemblyDef       = new AssemblyDefinition(
+                    name: editorAssemblyName,
+                    references: editorDependencies.ConvertAll((item) => GetAssemblyReferenceNameOrGuid(item)).ToArray(),
                     includePlatforms: new string[] { "Editor" },
                     overrideReferences: true,
                     autoReferenced: true);
-                SerializeObjectAsTextAsset(
-                    path: $"{packagePath}/Editor/{assemblyName}.Editor.asmdef",
-                    obj: editorDefinition);
+                var     editorAssemblyDefGuid   = SerializeObjectAsTextAsset(
+                    path: $"{packagePath}/Editor/{editorAssemblyName}.asmdef",
+                    obj: editorAssemblyDef);
+                var     editorAssemblyDefMeta   = new StringKeyValuePair(editorAssemblyName, editorAssemblyDefGuid);
 
                 if (HasValue(options: options, value: PackageGeneratorOptions.IncludeEditorTests))
                 {
-                    var     testDefinition  = new AssemblyDefinition(
-                        name: $"{assemblyName}.Editor.Tests",
+                    var     testDependencies    = new List<StringKeyValuePair>(editorDependencies);
+                    testDependencies.Add(editorAssemblyDefMeta);
+
+                    var     testAssemblyName    = $"{editorAssemblyName}.Tests";
+                    var     testAssemblyDef     = new AssemblyDefinition(
+                        name: testAssemblyName,
+                        references: testDependencies.ConvertAll((item) => GetAssemblyReferenceNameOrGuid(item)).ToArray(),
                         optionalUnityReferences: new string[] { "TestAssemblies" },
                         includePlatforms: new string[] { "Editor" },
                         overrideReferences: true,
                         precompiledReferences: new string[] { "NSubstitute.dll" },
                         autoReferenced: true);
                     SerializeObjectAsTextAsset(
-                        path: $"{packagePath}/Tests/Editor/{assemblyName}.Editor.Tests.asmdef",
-                        obj: testDefinition);
+                        path: $"{packagePath}/Tests/Editor/{testAssemblyName}.asmdef",
+                        obj: testAssemblyDef);
                 }
             }
         }
@@ -133,6 +159,15 @@ namespace BountyRush.PackageManagerServices
         private static bool HasValue(PackageGeneratorOptions options, PackageGeneratorOptions value)
         {
             return (options & value) != 0;
+        }
+
+        private static string GetAssemblyReferenceNameOrGuid(StringKeyValuePair meta)
+        {
+#if UNITY_2019_1_OR_NEWER
+            return meta.Value; // guid
+#else
+            return meta.Key; // definition name
+#endif
         }
 
         #endregion
